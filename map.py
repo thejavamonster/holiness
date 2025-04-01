@@ -5,39 +5,42 @@ import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.colors import LogNorm
 import matplotlib.ticker as ticker
+from shapely.strtree import STRtree
+
 
 # Load the CSV data into a DataFrame
 df = pd.read_csv('thissux.csv')
 df1 = pd.read_csv('cleaned_output.csv')
 df2 = pd.read_csv('ar.csv')
 df3 = pd.read_csv('rr.csv')
-# Function to retrieve the values for Amusement, Religious, and Real Estate for a given state and county
+
+
 result = [1,1,1]
 
 def get_values_for_county_state(state, county):
     global result
     if not df[(df['County Name'] == county) & (df['State Name'] == state)].empty:
         result = []
-        # Filter the DataFrame based on state and county
-        filtered_df = df[(df['State Name'] == state) & (df['County Name'] == county)]
+        #filter based on state and county
+        filtered_df = df[(df['State Name'] == state) & (df['County Name'] == county)] #THIS APPLIES TO COUNTIES THAT HAVE REALTORS, GAMBLING, AND CHURCHES
 
-        # Check if we have the three required NAICS descriptions (Real Estate, Amusement, Religious)
+        #three required descriptions
         required_values = ['Real Estate', 'Amusement', 'Religious']
         
         for value in required_values:
-            # Get the establishments value for each description type
+            #establishments number (number of businesses) for each NAICS description
             matching_row = filtered_df[filtered_df['NAICS Description'] == value]
             if not matching_row.empty:
                 result.append(int(matching_row['Establishments'].values[0]))
             else:
-                result.append(0)  # If the county does not have that category, append 0
+                result.append(0)  #basically not applicable
 
-    elif not df2[(df2['County Name'] == county) & (df2['State Name'] == state)].empty:
+    elif not df2[(df2['County Name'] == county) & (df2['State Name'] == state)].empty: #THIS APPLIES TO COUNTIES THAT HAVE ONLY GAMBLING AND CHURCHES
         result = []
         # Filter the DataFrame based on state and county
         filtered_df = df2[(df2['State Name'] == state) & (df2['County Name'] == county)]
 
-        # Check if we have the three required NAICS descriptions (Real Estate, Amusement, Religious)
+        #
         required_values = ['Real Estate', 'Amusement', 'Religious']
         
         for value in required_values:
@@ -48,10 +51,10 @@ def get_values_for_county_state(state, county):
             else:
                 result.append(0)  # If the county does not have that category, append 0
 
-    elif not df3[(df3['County Name'] == county) & (df3['State Name'] == state)].empty:
+    elif not df3[(df3['County Name'] == county) & (df3['State Name'] == state)].empty: #THIS APPLIES TO COUNTIES THAT ONLY HAVE REALTORS AND CHURCHES
         result = []
         # Filter the DataFrame based on state and county
-        filtered_df = df3[(df3['State Name'] == state) & (df3['County Name'] == county)]
+        filtered_df = df3[(df3['State Name'] == state) & (df3['County Name'] == county)] #df3 is the list of counties that have at least realtors and churches, but don't necessarily have other stuff
 
         # Check if we have the three required NAICS descriptions (Real Estate, Amusement, Religious)
         required_values = ['Real Estate', 'Amusement', 'Religious']
@@ -107,9 +110,25 @@ gdf = gpd.read_file(shapefile_path)
 print(gdf.columns)  # Columns in the GeoDataFrame (gdf)
 print(holiness_df.columns)  # Columns in the holiness data (holiness_df)
 
+
+
+
+# Clean up county and state names by stripping spaces and standardizing the case
+gdf['NAME'] = gdf['NAME'].str.strip().str.title()  # Strip and title-case county names in shapefile
+holiness_df['County Name'] = holiness_df['County Name'].str.strip().str.title()  # Clean county names
+holiness_df['State Name'] = holiness_df['State Name'].str.strip().str.title()  # Clean state names
+
+
+
 # Merge the shapefile with the holiness data based on county and state names
 gdf = gdf.rename(columns={"COUNTYFP": "County Code", "STUSPS": "State Abbreviation"})
 # Make sure the county and state names are consistent in both the DataFrame and shapefile
+
+
+
+
+
+
 gdf = gdf.merge(holiness_df, left_on=["STATE_NAME", "NAME"], right_on=["State Name", "County Name"])
 
 # Apply square root or log transformation to exaggerate lower values
@@ -136,8 +155,47 @@ gdf.plot(column='Holiness_transformed', ax=ax, legend=True, cax=cax, cmap=cmap, 
 # Adjust the colorbar ticks for clarity (optional)
 cax.tick_params(axis="y", labelsize=10)
 
+ax.set_xlim(-190, -60)
+
+
 # Add a title
 ax.set_title("US Counties by Holiness", fontsize=16)
+
+
+# Create an annotation (tooltip)
+annot = ax.annotate("", xy=(0,0), xytext=(10,10), textcoords="offset points",
+                    bbox=dict(boxstyle="round", fc="w"),
+                    arrowprops=dict(arrowstyle="->"))
+annot.set_visible(False)
+
+# Build spatial index for fast lookup
+shapes = gdf['geometry'].tolist()
+tree = STRtree(shapes)
+shape_to_index = {shape: idx for idx, shape in enumerate(shapes)}
+
+# Function to update tooltip
+def update_annot(event):
+    if event.inaxes == ax:
+        point = gpd.points_from_xy([event.xdata], [event.ydata])[0]
+        nearest = tree.query(point, predicate="intersects")
+
+        if nearest.size > 0:  # Ensure there's at least one result
+            county_index = nearest[0]  # Use the integer index directly
+            if county_index in gdf.index:  # Ensure index is valid
+                row = gdf.loc[county_index]
+
+                annot.xy = (event.xdata, event.ydata)
+                text = f"{row['NAME']}, {row['STATE_NAME']}\nHoliness: {row['Holiness']:.4f}"
+                annot.set_text(text)
+                annot.set_visible(True)
+                fig.canvas.draw_idle()
+                return
+
+    annot.set_visible(False)
+    fig.canvas.draw_idle()
+
+# Connect the hover event
+fig.canvas.mpl_connect("motion_notify_event", update_annot)
 
 # Show the plot
 plt.show()
